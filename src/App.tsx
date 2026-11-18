@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Alert, Button, Checkbox, ConfigProvider, Empty, Input, Modal, Popconfirm, Select, Spin, Tag, Tooltip, message, theme } from "antd";
 import { FolderOpen, Folder, Layers, Plus, RefreshCw, Search, Pencil, Trash2, ExternalLink, Network, CheckSquare, Square, FolderPlus, Moon, Sun } from "lucide-react";
 
@@ -18,10 +18,11 @@ export default function App(){
  const [root,setRoot]=useState(""); const [rootDraft,setRootDraft]=useState("");
  const [data,setData]=useState<Data|null>(null); const [loading,setLoading]=useState(false);
  const [search,setSearch]=useState(""); const [selectedWs,setSelectedWs]=useState<string[]>([]);
+ const hasInitializedWorkspaceSelection=useRef(false);
  const [modal,setModal]=useState<"create"|"edit"|null>(null); const [editing,setEditing]=useState<Workspace|null>(null);
  const [wsName,setWsName]=useState(""); const [chosen,setChosen]=useState<string[]>([]);
  const [saveDir,setSaveDir]=useState(""); const [dirOptions,setDirOptions]=useState<{name:string,path:string}[]>([]);
- const [busy,setBusy]=useState(false); const [viewMode,setViewMode]=useState<"list"|"graph">("list");
+ const [busy,setBusy]=useState(false); const [viewMode,setViewMode]=useState<"list"|"graph">("graph");
  const [msg,ctx]=message.useMessage();
 
  useEffect(()=>{
@@ -31,9 +32,9 @@ export default function App(){
  },[isDark]);
 
  async function loadRoot(){setLoading(true);try{const s=await api("/api/status");if(s.root){setRoot(s.root);setRootDraft(s.root);await refresh(s.root)}}catch(e:any){msg.error(e.message)}finally{setLoading(false)}}
- async function refresh(r=root){if(!r)return;setLoading(true);try{const d=await api("/api/data");setData(d);setSelectedWs(s=>s.filter(id=>d.workspaces.some((w:Workspace)=>w.id===id)))}catch(e:any){msg.error(e.message)}finally{setLoading(false)}}
+ async function refresh(r=root){if(!r)return;setLoading(true);try{const d=await api("/api/data");setData(d);setSelectedWs(s=>{const valid=s.filter(id=>d.workspaces.some((w:Workspace)=>w.id===id));if(!hasInitializedWorkspaceSelection.current){hasInitializedWorkspaceSelection.current=true;return valid.length?valid:d.workspaces[0]?[d.workspaces[0].id]:[]}return valid})}catch(e:any){msg.error(e.message)}finally{setLoading(false)}}
  useEffect(()=>{loadRoot()},[]);
- async function setProjectsRoot(){setBusy(true);try{const d=await api("/api/root",{method:"POST",body:JSON.stringify({root:rootDraft})});setRoot(d.root);setData(null);setSelectedWs([]);await refresh(d.root);msg.success("Projects root configured")}catch(e:any){msg.error(e.message)}finally{setBusy(false)}}
+ async function setProjectsRoot(){setBusy(true);try{const d=await api("/api/root",{method:"POST",body:JSON.stringify({root:rootDraft})});setRoot(d.root);setData(null);setSelectedWs([]);hasInitializedWorkspaceSelection.current=false;await refresh(d.root);msg.success("Projects root configured")}catch(e:any){msg.error(e.message)}finally{setBusy(false)}}
  const filteredProjects=useMemo(()=>data?.projects.filter(p=>(p.name+" "+p.path).toLowerCase().includes(search.toLowerCase()))||[],[data,search]);
  const filteredWorkspaces=useMemo(()=>data?.workspaces.filter(w=>(w.name+" "+w.filePath).toLowerCase().includes(search.toLowerCase()))||[],[data,search]);
  async function openSelected(ids=selectedWs){if(!ids.length)return msg.warning("Select at least one workspace.");setBusy(true);try{const d=await api("/api/open",{method:"POST",body:JSON.stringify({workspaces:ids})});msg.success(`Requested ${d.opened} separate Cursor window(s)`)}catch(e:any){msg.error(e.message)}finally{setBusy(false)}}
@@ -50,7 +51,7 @@ export default function App(){
  {data?.warnings.length?<Alert type="warning" showIcon message="Some workspace files could not be read" description={data.warnings.join(" · ")}/>:null}
  <div className="summary-grid"><div className="summary"><span>Workspaces</span><strong>{data?.workspaces.length??"—"}</strong><Layers size={19}/></div><div className="summary"><span>Projects</span><strong>{data?.projects.length??"—"}</strong><Folder size={19}/></div><div className="summary"><span>Unassigned</span><strong>{data?.projects.filter(p=>!p.referenced).length??"—"}</strong><Network size={19}/></div></div>
  <div className="toolbar"><Input allowClear prefix={<Search size={16}/>} placeholder="Search projects and workspaces…" value={search} onChange={e=>setSearch(e.target.value)} /><span className="root-hint">{root}</span><div className="view-switch"><Button size="small" type={viewMode==="list"?"primary":"default"} onClick={()=>setViewMode("list")}>List</Button><Button size="small" type={viewMode==="graph"?"primary":"default"} icon={<Network size={14}/>} onClick={()=>setViewMode("graph")}>Graph</Button></div></div>
- {viewMode==="graph"?<GraphPanel workspaces={filteredWorkspaces} projects={filteredProjects}/>:<div className="columns">
+ {viewMode==="graph"?<GraphPanel workspaces={filteredWorkspaces} projects={filteredProjects} onOpenWorkspace={w=>openSelected([w.id])} opening={busy}/>:<div className="columns">
  <section className="panel"><div className="panel-head"><div><h2>Workspaces</h2><p>Select one or more to open each in a separate Cursor window.</p></div><div className="panel-actions"><Button size="small" onClick={()=>setSelectedWs(allSelected?[]:(data?.workspaces.map(w=>w.id)||[]))}>{allSelected?"Clear":"Select all"}</Button><Button size="small" type="primary" icon={<ExternalLink size={14}/>} disabled={!selectedWs.length} loading={busy} onClick={()=>openSelected()}>Open selected ({selectedWs.length})</Button></div></div>
  {loading?<div className="loading"><Spin/></div>:filteredWorkspaces.length?filteredWorkspaces.map(w=><div className={"workspace-card "+(selectedWs.includes(w.id)?"chosen":"")} key={w.id}><Checkbox checked={selectedWs.includes(w.id)} onChange={e=>setSelectedWs(s=>e.target.checked?[...s,w.id]:s.filter(x=>x!==w.id))}/><div className="workspace-icon"><Layers size={18}/></div><div className="workspace-content"><div className="workspace-title"><div className="card-main"><b>{w.name}</b><span>{w.filePath}</span></div><span className="workspace-count">{w.folders.length} {w.folders.length===1?"folder":"folders"}</span></div>{w.folders.length?<div className="workspace-projects">{w.folders.map((f,i)=>{const status=f.remote?"remote":f.exists===false?"missing":f.exists===true?"local":"unknown";const statusLabel=status==="remote"?"Remote":status==="missing"?"Missing":status==="local"?"Available":"Unresolved";return <div className={`workspace-project ${status}`} key={`${f.path}-${i}`}><div className="workspace-project-icon"><Folder size={14}/></div><div className="workspace-project-label"><b>{folderLabel(f)}</b><span>{statusLabel}</span></div><i className="workspace-status-dot"/></div>})}</div>:<div className="workspace-empty">No project folders listed</div>}</div><div className="card-actions"><Tooltip title="Open in Cursor"><Button type="text" icon={<ExternalLink size={16}/>} onClick={()=>openSelected([w.id])}/></Tooltip><Tooltip title="Edit workspace"><Button type="text" icon={<Pencil size={16}/>} onClick={()=>showEdit(w)}/></Tooltip><Popconfirm title="Delete this workspace file?" description="Project folders will not be deleted." onConfirm={()=>deleteWorkspace(w)}><Button type="text" danger icon={<Trash2 size={16}/>}/></Popconfirm></div></div>):<Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="No workspaces found"/>}</section>
  <section className="panel"><div className="panel-head"><div><h2>Projects</h2><p>Discovered folders and their workspace membership.</p></div></div>
@@ -67,20 +68,24 @@ export default function App(){
 }
 
 
-function GraphPanel({workspaces,projects}:{workspaces:Workspace[];projects:Project[]}){
- const [active,setActive]=useState<string|null>(null);
+function GraphPanel({workspaces,projects,onOpenWorkspace,opening}:{workspaces:Workspace[];projects:Project[];onOpenWorkspace:(workspace:Workspace)=>void;opening:boolean}){
+ const [active,setActive]=useState<string|null>(workspaces[0]?.id??null);
+ useEffect(()=>{if(active&&!workspaces.some(w=>w.id===active)&&!projects.some(p=>p.path===active))setActive(workspaces[0]?.id??null)},[active,workspaces,projects]);
+ const selectedWorkspace=workspaces.find(w=>w.id===active);
+ const visibleWorkspaces=selectedWorkspace?[selectedWorkspace]:workspaces;
+ const visibleProjects=selectedWorkspace?projects.filter(p=>selectedWorkspace.folders.some(f=>f.resolvedPath===p.path)):projects;
  const width=1100, top=54, leftX=250, rightX=850;
  const wsY=(i:number)=>top+i*88+22, prY=(i:number)=>top+i*66+18;
- const height=Math.max(340,top+Math.max(workspaces.length*88,projects.length*66)+70);
- const projectIndex=new Map(projects.map((p,i)=>[p.path,i]));
+ const height=Math.max(340,top+Math.max(visibleWorkspaces.length*88,visibleProjects.length*66)+70);
+ const projectIndex=new Map(visibleProjects.map((p,i)=>[p.path,i]));
  const related=new Set<string>();
  if(active){const w=workspaces.find(x=>x.id===active);const p=projects.find(x=>x.path===active);if(w)w.folders.forEach(f=>{if(f.resolvedPath)related.add(f.resolvedPath)});if(p)workspaces.filter(w=>w.folders.some(f=>f.resolvedPath===p.path)).forEach(w=>related.add(w.id));}
- return <section className="panel graph-panel"><div className="panel-head"><div><h2>Workspace relationships</h2><p>Lines show which project folders are included in each workspace. Select a node to highlight its connections.</p></div><Button size="small" onClick={()=>setActive(null)}>Clear selection</Button></div>
- {workspaces.length||projects.length?<div className="graph-scroll"><svg viewBox={`0 0 ${width} ${height}`} role="img" aria-label="Workspace and project relationship graph">
+ return <section className="panel graph-panel"><div className="panel-head"><div><h2>Workspace relationships</h2><p>{selectedWorkspace?`Showing projects included in ${selectedWorkspace.name}.`:"Lines show which project folders are included in each workspace. Select a node to focus its connections."}</p></div><div className="panel-actions">{selectedWorkspace&&<Button size="small" type="primary" icon={<ExternalLink size={14}/>} loading={opening} onClick={()=>onOpenWorkspace(selectedWorkspace)}>Open workspace</Button>}<Button size="small" onClick={()=>setActive(null)}>Show all</Button></div></div>
+ {visibleWorkspaces.length||visibleProjects.length?<div className="graph-scroll"><svg viewBox={`0 0 ${width} ${height}`} role="img" aria-label="Workspace and project relationship graph">
  <text x="34" y="28" className="graph-heading">WORKSPACES</text><text x="690" y="28" className="graph-heading">PROJECT FOLDERS</text>
- {workspaces.flatMap((w,i)=>w.folders.map((f)=>{const j=f.resolvedPath?projectIndex.get(f.resolvedPath):undefined;if(j===undefined)return null;const on=!active||active===w.id||active===f.resolvedPath;return <line key={`${w.id}-${f.path}`} x1={leftX+155} y1={wsY(i)} x2={rightX-155} y2={prY(j)} className={on?"graph-edge active":"graph-edge faded"}/>;}))}
- {workspaces.map((w,i)=><g key={w.id} className={`graph-node ${active&&active!==w.id&&!related.has(w.id)?"faded":""}`} onClick={()=>setActive(active===w.id?null:w.id)}><rect x="34" y={wsY(i)-24} width="371" height="48" rx="10" className="graph-workspace"/><text x="52" y={wsY(i)+4} className="graph-name">{w.name.length>38?w.name.slice(0,35)+"…":w.name}</text><text x="388" y={wsY(i)+4} textAnchor="end" className="graph-count">{w.folders.length}</text></g>)}
- {projects.map((p,i)=><g key={p.path} className={`graph-node ${active&&active!==p.path&&!related.has(p.path)?"faded":""}`} onClick={()=>setActive(active===p.path?null:p.path)}><rect x="695" y={prY(i)-22} width="371" height="44" rx="10" className="graph-project"/><text x="712" y={prY(i)+4} className="graph-name">{p.name.length>37?p.name.slice(0,34)+"…":p.name}</text><text x="1048" y={prY(i)+4} textAnchor="end" className="graph-count">{p.workspaces.length}</text></g>)}
+ {visibleWorkspaces.flatMap((w,i)=>w.folders.map((f)=>{const j=f.resolvedPath?projectIndex.get(f.resolvedPath):undefined;if(j===undefined)return null;return <line key={`${w.id}-${f.path}`} x1={leftX+155} y1={wsY(i)} x2={rightX-155} y2={prY(j)} className="graph-edge active"/>;}))}
+ {visibleWorkspaces.map((w,i)=><g key={w.id} className={`graph-node ${active===w.id?"selected":""} ${active&&!selectedWorkspace&&active!==w.id&&!related.has(w.id)?"faded":""}`} onClick={()=>setActive(active===w.id?null:w.id)}><rect x="34" y={wsY(i)-24} width="371" height="48" rx="10" className="graph-workspace"/><text x="52" y={wsY(i)+4} className="graph-name">{w.name.length>38?w.name.slice(0,35)+"…":w.name}</text><text x="388" y={wsY(i)+4} textAnchor="end" className="graph-count">{w.folders.length}</text></g>)}
+ {visibleProjects.map((p,i)=><g key={p.path} className={`graph-node ${active===p.path?"selected":""} ${active&&!selectedWorkspace&&active!==p.path&&!related.has(p.path)?"faded":""}`} onClick={()=>setActive(active===p.path?null:p.path)}><rect x="695" y={prY(i)-22} width="371" height="44" rx="10" className="graph-project"/><text x="712" y={prY(i)+4} className="graph-name">{p.name.length>37?p.name.slice(0,34)+"…":p.name}</text><text x="1048" y={prY(i)+4} textAnchor="end" className="graph-count">{p.workspaces.length}</text></g>)}
  </svg></div>:<Empty description="Nothing to visualize"/>}
  <div className="graph-legend"><span><i className="legend-dot blue"/>Workspace</span><span><i className="legend-dot green"/>Project folder</span><span>Line = workspace membership</span></div></section>
 }
